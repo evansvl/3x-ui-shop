@@ -106,7 +106,9 @@ def create_payment_method_keyboard(payment_methods: dict, action: str, key_id: i
     if payment_methods and payment_methods.get("yookassa"):
         if get_setting("sbp_enabled"):
             builder.button(text="🏦 СБП", callback_data="pay_yookassa_sbp")
-        builder.button(text="🏦 Банковская карта", callback_data="pay_yookassa_card")
+            builder.button(text="🏦 Банковская карта", callback_data="pay_yookassa_card")
+        else:
+            builder.button(text="🏦 Банковская карта", callback_data="pay_yookassa_card")
     if payment_methods and payment_methods.get("heleket"):
         builder.button(text="💎 Криптовалюта", callback_data="pay_heleket")
     if payment_methods and payment_methods.get("cryptobot"):
