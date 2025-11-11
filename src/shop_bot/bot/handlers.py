@@ -923,13 +923,13 @@ def get_user_router() -> Router:
         await state.set_state(PaymentProcess.waiting_for_email)
 
 
-    @user_router.callback_query(PaymentProcess.waiting_for_payment_method, F.data == "pay_yookassa")
+    @user_router.callback_query(PaymentProcess.waiting_for_payment_method, F.data == "pay_yookassa_sbp")
     async def create_yookassa_payment_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Создаю ссылку на оплату...")
-        
+
         data = await state.get_data()
         user_data = get_user(callback.from_user.id)
-        
+
         plan_id = data.get('plan_id')
         plan = get_plan_by_id(plan_id)
 
@@ -953,7 +953,7 @@ def get_user_router() -> Router:
         host_name = data.get('host_name')
         action = data.get('action')
         key_id = data.get('key_id')
-        
+
         if not customer_email:
             customer_email = get_setting("receipt_email")
 
@@ -984,6 +984,7 @@ def get_user_router() -> Router:
             payment_payload = {
                 "amount": {"value": price_str_for_api, "currency": "RUB"},
                 "confirmation": {"type": "redirect", "return_url": f"https://t.me/{TELEGRAM_BOT_USERNAME}"},
+                "payment_method_data": {"type": "sbp"},
                 "capture": True,
                 "description": f"Подписка на {months} мес.",
                 "metadata": {
@@ -997,7 +998,7 @@ def get_user_router() -> Router:
                 payment_payload['receipt'] = receipt
 
             payment = Payment.create(payment_payload, uuid.uuid4())
-            
+
             await state.clear()
             
             await callback.message.edit_text(
@@ -1009,6 +1010,93 @@ def get_user_router() -> Router:
             await callback.message.answer("Не удалось создать ссылку на оплату.")
             await state.clear()
 
+    @user_router.callback_query(PaymentProcess.waiting_for_payment_method, F.data == "pay_yookassa_card")
+    async def create_yookassa_payment_handler(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("Создаю ссылку на оплату...")
+
+        data = await state.get_data()
+        user_data = get_user(callback.from_user.id)
+
+        plan_id = data.get('plan_id')
+        plan = get_plan_by_id(plan_id)
+
+        if not plan:
+            await callback.message.answer("Произошла ошибка при выборе тарифа.")
+            await state.clear()
+            return
+
+        base_price = Decimal(str(plan['price']))
+        price_rub = base_price
+
+        if user_data.get('referred_by') and user_data.get('total_spent', 0) == 0:
+            discount_percentage_str = get_setting("referral_discount") or "0"
+            discount_percentage = Decimal(discount_percentage_str)
+            if discount_percentage > 0:
+                discount_amount = (base_price * discount_percentage / 100).quantize(Decimal("0.01"))
+                price_rub = base_price - discount_amount
+
+        plan_id = data.get('plan_id')
+        customer_email = data.get('customer_email')
+        host_name = data.get('host_name')
+        action = data.get('action')
+        key_id = data.get('key_id')
+
+        if not customer_email:
+            customer_email = get_setting("receipt_email")
+
+        plan = get_plan_by_id(plan_id)
+        if not plan:
+            await callback.message.answer("Произошла ошибка при выборе тарифа.")
+            await state.clear()
+            return
+
+        months = plan['months']
+        user_id = callback.from_user.id
+
+        try:
+            price_str_for_api = f"{price_rub:.2f}"
+            price_float_for_metadata = float(price_rub)
+
+            receipt = None
+            if customer_email and is_valid_email(customer_email):
+                receipt = {
+                    "customer": {"email": customer_email},
+                    "items": [{
+                        "description": f"Подписка на {months} мес.",
+                        "quantity": "1.00",
+                        "amount": {"value": price_str_for_api, "currency": "RUB"},
+                        "vat_code": "1"
+                    }]
+                }
+            payment_payload = {
+                "amount": {"value": price_str_for_api, "currency": "RUB"},
+                "confirmation": {"type": "redirect", "return_url": f"https://t.me/{TELEGRAM_BOT_USERNAME}"},
+                "payment_method_data": {"type": "bank_card"},
+                "capture": True,
+                "description": f"Подписка на {months} мес.",
+                "metadata": {
+                    "user_id": user_id, "months": months, "price": price_float_for_metadata, 
+                    "action": action, "key_id": key_id, "host_name": host_name,
+                    "plan_id": plan_id, "customer_email": customer_email,
+                    "payment_method": "YooKassa"
+                }
+            }
+            if receipt:
+                payment_payload['receipt'] = receipt
+
+            payment = Payment.create(payment_payload, uuid.uuid4())
+
+            await state.clear()
+            
+            await callback.message.edit_text(
+                "Нажмите на кнопку ниже для оплаты:",
+                reply_markup=keyboards.create_payment_keyboard(payment.confirmation.confirmation_url)
+            )
+        except Exception as e:
+            logger.error(f"Failed to create YooKassa payment: {e}", exc_info=True)
+            await callback.message.answer("Не удалось создать ссылку на оплату.")
+            await state.clear()
+            
     @user_router.callback_query(PaymentProcess.waiting_for_payment_method, F.data == "pay_cryptobot")
     async def create_cryptobot_invoice_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Создаю счет в Crypto Pay...")
